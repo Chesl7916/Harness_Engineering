@@ -14,6 +14,10 @@ Give it a one-sentence prompt, and it autonomously: plans the product → negoti
 
 ### Demo
 
+The following app was autonomously generated using `python harness.py "Build an interactive periodic table of elements with search, category filters, and element detail popups"`:
+
+> Model: Minimax M2.7 | Total time: 32.3 min | Tokens: 2.29M | Cost: $0.303
+
 <p align="center">
   <img src="docs/demo.gif" alt="Harness Demo" width="720" />
 </p>

@@ -14,6 +14,10 @@
 
 ### 演示
 
+以下是使用 `python harness.py "Build an interactive periodic table of elements with search, category filters, and element detail popups"` 自主生成的应用：
+
+> 模型：Minimax M2.7 | 总耗时：32.3 分钟 | Token 用量：2.29M | 成本：$0.303
+
 <p align="center">
   <img src="docs/demo.gif" alt="Harness Demo" width="720" />
 </p>
