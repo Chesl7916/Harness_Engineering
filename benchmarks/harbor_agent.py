@@ -54,19 +54,31 @@ class HarnessAgent(BaseInstalledAgent):
     async def install(self, environment: BaseEnvironment) -> None:
         """Install dependencies and clone our repo into the container.
 
-        Strategy: avoid apt-get update when possible (slow/blocked on Daytona Tier 2).
-        Most TB2 prebuilt images already have python3 and git.
-        We only need pip for installing openai+tiktoken, and there are
-        fallback paths that don't require apt-get at all.
+        Key challenges in TB2 environments:
+        - Some images lack pip3 (only have python3)
+        - dpkg lock contention with verifier setup scripts
+        - Daytona Tier 2 network restrictions may slow apt-get
+
+        Strategy:
+        1. Wait for any concurrent dpkg operations to finish
+        2. Clone repo (git is available in most images)
+        3. Try pip install via multiple fallback paths
+        4. Only use apt-get as absolute last resort, with timeout
         """
-        # Step 1: Ensure git is available (needed for cloning our repo)
-        # If git is missing, try apt-get with a timeout to avoid hanging
+        # Step 1: Wait for dpkg lock (verifier setup may be running apt-get concurrently)
+        # Then ensure git is available
         await self.exec_as_root(
             environment,
             command=(
+                # Wait up to 60s for dpkg lock to be released
+                "for i in $(seq 1 30); do "
+                "  fuser /var/lib/dpkg/lock >/dev/null 2>&1 || break; "
+                "  sleep 2; "
+                "done; "
+                # Ensure git exists
                 "command -v git >/dev/null 2>&1 || "
-                "( timeout 60 apt-get update -qq 2>/dev/null && "
-                "  timeout 60 apt-get install -y -qq git 2>/dev/null ) || "
+                "( apt-get update -qq 2>/dev/null && "
+                "  apt-get install -y -qq git 2>/dev/null ) || "
                 "true"
             ),
         )
@@ -82,20 +94,24 @@ class HarnessAgent(BaseInstalledAgent):
         )
 
         # Step 3: Install Python deps via multiple fallback paths
-        # Try pip3/pip first (already installed in most images),
-        # then python3 -m pip, then ensurepip as last resort.
-        # Each path tries --break-system-packages for PEP 668 compat.
+        # Wait for dpkg lock again before any apt-get attempts
         await self.exec_as_root(
             environment,
             command=(
+                # Fast paths first (no apt-get needed)
                 "( pip3 install --break-system-packages -q openai tiktoken 2>/dev/null ) || "
-                "( pip3 install -q openai tiktoken 2>/dev/null ) || "
                 "( pip install --break-system-packages -q openai tiktoken 2>/dev/null ) || "
                 "( python3 -m pip install --break-system-packages -q openai tiktoken 2>/dev/null ) || "
-                "( python3 -m ensurepip --default-pip 2>/dev/null && "
+                # Try ensurepip to bootstrap pip
+                "( python3 -m ensurepip --break-system-packages 2>/dev/null && "
                 "  python3 -m pip install --break-system-packages -q openai tiktoken 2>/dev/null ) || "
-                "( timeout 60 apt-get update -qq 2>/dev/null && "
-                "  timeout 60 apt-get install -y -qq python3-pip 2>/dev/null && "
+                # Last resort: wait for dpkg lock, then apt-get install pip
+                "( for i in $(seq 1 30); do "
+                "    fuser /var/lib/dpkg/lock >/dev/null 2>&1 || break; "
+                "    sleep 2; "
+                "  done && "
+                "  apt-get update -qq 2>/dev/null && "
+                "  apt-get install -y -qq python3-pip 2>/dev/null && "
                 "  pip3 install --break-system-packages -q openai tiktoken 2>/dev/null ) || "
                 "true"
             ),
