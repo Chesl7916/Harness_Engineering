@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import time
 import logging
+from pathlib import Path
 from openai import OpenAI
 
 import config
@@ -14,6 +15,69 @@ import tools
 import context
 
 log = logging.getLogger("harness")
+
+
+# ---------------------------------------------------------------------------
+# Trace writer — records every agent event to a JSONL file
+# ---------------------------------------------------------------------------
+
+class TraceWriter:
+    """Appends structured events to a JSONL trace file in the workspace.
+
+    Each line is a JSON object with: timestamp, agent, event_type, and data.
+    Trace file: {WORKSPACE}/_trace_{agent_name}.jsonl
+    """
+
+    def __init__(self, agent_name: str):
+        self.agent_name = agent_name
+        self._path = Path(config.WORKSPACE) / f"_trace_{agent_name}.jsonl"
+        self._start_time = time.time()
+
+    def _write(self, event_type: str, data: dict):
+        try:
+            entry = {
+                "t": round(time.time() - self._start_time, 2),
+                "agent": self.agent_name,
+                "event": event_type,
+                **data,
+            }
+            with open(self._path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False)[:10000] + "\n")
+        except Exception:
+            pass  # never let tracing break the agent
+
+    def iteration(self, n: int, tokens: int):
+        self._write("iteration", {"n": n, "tokens": tokens})
+
+    def llm_response(self, content: str | None, tool_calls: list | None, finish_reason: str | None):
+        self._write("llm_response", {
+            "content": (content or "")[:500],
+            "tool_calls": [tc["function"]["name"] for tc in (tool_calls or [])],
+            "finish_reason": finish_reason,
+        })
+
+    def tool_call(self, name: str, args: dict, result: str):
+        self._write("tool_call", {
+            "tool": name,
+            "args": _truncate(json.dumps(args, ensure_ascii=False), 300),
+            "result": _truncate(result, 500),
+        })
+
+    def middleware_inject(self, source: str, hook: str, message: str):
+        self._write("middleware", {
+            "source": source,
+            "hook": hook,
+            "message": message[:300],
+        })
+
+    def context_event(self, event_type: str, reason: str = ""):
+        self._write("context", {"type": event_type, "reason": reason})
+
+    def error(self, error_type: str, message: str):
+        self._write("error", {"type": error_type, "message": message[:500]})
+
+    def finish(self, reason: str, iterations: int):
+        self._write("finish", {"reason": reason, "iterations": iterations})
 
 # ---------------------------------------------------------------------------
 # LLM client (singleton)
@@ -81,7 +145,10 @@ class Agent:
         or we hit the iteration limit.
 
         Returns the final assistant text response.
+        Writes a JSONL trace file to {WORKSPACE}/_trace_{name}.jsonl
         """
+        trace = TraceWriter(self.name)
+
         messages: list[dict] = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": task},
@@ -97,18 +164,22 @@ class Agent:
                 inject = mw.per_iteration(iteration, messages)
                 if inject:
                     messages.append({"role": "user", "content": inject})
+                    trace.middleware_inject(type(mw).__name__, "per_iteration", inject)
 
             # --- Context lifecycle check ---
             token_count = context.count_tokens(messages)
             log.info(f"[{self.name}] iteration={iteration}  tokens≈{token_count}")
+            trace.iteration(iteration, token_count)
 
             if token_count > config.RESET_THRESHOLD or context.detect_anxiety(messages):
                 reason = "anxiety detected" if token_count <= config.RESET_THRESHOLD else f"tokens {token_count} > threshold"
                 log.warning(f"[{self.name}] Context reset triggered ({reason}). Writing checkpoint...")
+                trace.context_event("reset", reason)
                 checkpoint = context.create_checkpoint(messages, llm_call_simple)
                 messages = context.restore_from_checkpoint(checkpoint, self.system_prompt)
             elif token_count > config.COMPRESS_THRESHOLD:
                 log.info(f"[{self.name}] Compacting context (role={self.name})...")
+                trace.context_event("compact", f"tokens={token_count}")
                 messages = context.compact_messages(messages, llm_call_simple, role=self.name)
 
             # --- LLM call ---
@@ -125,21 +196,25 @@ class Agent:
                 response = client.chat.completions.create(**kwargs)
             except Exception as e:
                 log.error(f"[{self.name}] API error: {e}")
+                trace.error("api_error", str(e))
                 consecutive_errors += 1
                 if consecutive_errors >= config.MAX_TOOL_ERRORS:
                     log.error(f"[{self.name}] Too many API errors, aborting.")
+                    trace.finish("api_errors", iteration)
                     break
                 time.sleep(2 ** consecutive_errors)
                 continue
 
             consecutive_errors = 0
 
-            # --- Guard against empty choices (some providers return empty) ---
+            # --- Guard against empty choices ---
             if not response.choices:
                 log.warning(f"[{self.name}] API returned empty choices. Retrying...")
+                trace.error("empty_choices", "API returned no choices")
                 consecutive_errors += 1
                 if consecutive_errors >= config.MAX_TOOL_ERRORS:
                     log.error(f"[{self.name}] Too many empty responses, aborting.")
+                    trace.finish("empty_choices", iteration)
                     break
                 time.sleep(2)
                 continue
@@ -163,6 +238,9 @@ class Agent:
                 ]
             messages.append(assistant_msg)
 
+            # --- Trace the LLM response ---
+            trace.llm_response(msg.content, assistant_msg.get("tool_calls"), choice.finish_reason)
+
             # --- If model produced text, capture it ---
             if msg.content:
                 last_text = msg.content
@@ -175,11 +253,13 @@ class Agent:
                     inject = mw.pre_exit(messages)
                     if inject:
                         messages.append({"role": "user", "content": inject})
+                        trace.middleware_inject(type(mw).__name__, "pre_exit", inject)
                         forced_continue = True
-                        break  # one pre-exit nudge at a time
+                        break
                 if forced_continue:
-                    continue  # re-enter the loop
+                    continue
                 log.info(f"[{self.name}] Finished (no more tool calls).")
+                trace.finish("no_tool_calls", iteration)
                 break
 
             # --- Execute tool calls ---
@@ -189,6 +269,7 @@ class Agent:
                     fn_args = json.loads(tc.function.arguments)
                 except json.JSONDecodeError:
                     log.warning(f"[{self.name}] Bad JSON in tool call {fn_name}: {tc.function.arguments[:200]}")
+                    trace.error("bad_json", f"{fn_name}: {tc.function.arguments[:200]}")
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -199,6 +280,7 @@ class Agent:
                 log.info(f"[{self.name}] tool: {fn_name}({_truncate(str(fn_args), 120)})")
                 result = tools.execute_tool(fn_name, fn_args)
                 log.debug(f"[{self.name}] tool result: {_truncate(result, 200)}")
+                trace.tool_call(fn_name, fn_args, result)
 
                 messages.append({
                     "role": "tool",
@@ -211,15 +293,18 @@ class Agent:
                     inject = mw.post_tool(fn_name, fn_args, result, messages)
                     if inject:
                         messages.append({"role": "user", "content": inject})
-                        break  # one nudge per tool call is enough
+                        trace.middleware_inject(type(mw).__name__, "post_tool", inject)
+                        break
 
             # --- Check finish reason ---
             if choice.finish_reason == "stop":
                 log.info(f"[{self.name}] Finished (stop).")
+                trace.finish("stop", iteration)
                 break
 
             if choice.finish_reason == "length":
-                log.warning(f"[{self.name}] Output truncated (max_tokens hit). Asking model to retry with smaller chunks.")
+                log.warning(f"[{self.name}] Output truncated (max_tokens hit).")
+                trace.error("length_truncated", "max_tokens hit")
                 messages.append({
                     "role": "user",
                     "content": (
@@ -234,6 +319,7 @@ class Agent:
 
         else:
             log.warning(f"[{self.name}] Hit max iterations ({config.MAX_AGENT_ITERATIONS}).")
+            trace.finish("max_iterations", config.MAX_AGENT_ITERATIONS)
 
         return last_text
 
