@@ -17,8 +17,6 @@ import re
 import subprocess
 import logging
 
-import tiktoken
-
 import config
 
 log = logging.getLogger("harness")
@@ -27,11 +25,23 @@ log = logging.getLogger("harness")
 # Token counting
 # ---------------------------------------------------------------------------
 
+# Try tiktoken for accurate counting; fall back to char-based estimation.
+# This removes tiktoken as a hard dependency — critical for TB2 environments
+# where pip install may be slow or unavailable.
 _encoder = None
+_use_tiktoken = False
+
+try:
+    import tiktoken
+    _use_tiktoken = True
+except ImportError:
+    pass
 
 
 def _get_encoder():
     global _encoder
+    if not _use_tiktoken:
+        return None
     if _encoder is None:
         try:
             _encoder = tiktoken.encoding_for_model(config.MODEL)
@@ -41,7 +51,8 @@ def _get_encoder():
 
 
 def count_tokens(messages: list[dict]) -> int:
-    """Rough token count for a message list."""
+    """Rough token count for a message list.
+    Uses tiktoken if available, otherwise estimates ~4 chars per token."""
     enc = _get_encoder()
     total = 0
     for msg in messages:
@@ -50,9 +61,18 @@ def count_tokens(messages: list[dict]) -> int:
             content = " ".join(
                 block.get("text", "") for block in content if isinstance(block, dict)
             )
-        total += len(enc.encode(str(content))) + 4
+        text = str(content)
+        if enc:
+            total += len(enc.encode(text)) + 4
+        else:
+            # ~4 chars per token is a reasonable approximation
+            total += len(text) // 4 + 4
         for tc in msg.get("tool_calls", []):
-            total += len(enc.encode(str(tc.get("function", {}).get("arguments", ""))))
+            args = str(tc.get("function", {}).get("arguments", ""))
+            if enc:
+                total += len(enc.encode(args))
+            else:
+                total += len(args) // 4
     return total
 
 

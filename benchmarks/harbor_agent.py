@@ -93,18 +93,18 @@ class HarnessAgent(BaseInstalledAgent):
             ),
         )
 
-        # Step 3: Install Python deps via multiple fallback paths
-        # Wait for dpkg lock again before any apt-get attempts
+        # Step 3: Install Python deps — only openai is required (tiktoken is optional)
+        # openai is a pure Python package (py3-none-any wheel), installs fast
         await self.exec_as_root(
             environment,
             command=(
                 # Fast paths first (no apt-get needed)
-                "( pip3 install --break-system-packages -q openai tiktoken 2>/dev/null ) || "
-                "( pip install --break-system-packages -q openai tiktoken 2>/dev/null ) || "
-                "( python3 -m pip install --break-system-packages -q openai tiktoken 2>/dev/null ) || "
+                "( pip3 install --break-system-packages -q openai 2>/dev/null ) || "
+                "( pip install --break-system-packages -q openai 2>/dev/null ) || "
+                "( python3 -m pip install --break-system-packages -q openai 2>/dev/null ) || "
                 # Try ensurepip to bootstrap pip
                 "( python3 -m ensurepip --break-system-packages 2>/dev/null && "
-                "  python3 -m pip install --break-system-packages -q openai tiktoken 2>/dev/null ) || "
+                "  python3 -m pip install --break-system-packages -q openai 2>/dev/null ) || "
                 # Last resort: wait for dpkg lock, then apt-get install pip
                 "( for i in $(seq 1 30); do "
                 "    fuser /var/lib/dpkg/lock >/dev/null 2>&1 || break; "
@@ -112,7 +112,7 @@ class HarnessAgent(BaseInstalledAgent):
                 "  done && "
                 "  apt-get update -qq 2>/dev/null && "
                 "  apt-get install -y -qq python3-pip 2>/dev/null && "
-                "  pip3 install --break-system-packages -q openai tiktoken 2>/dev/null ) || "
+                "  pip3 install --break-system-packages -q openai 2>/dev/null ) || "
                 "true"
             ),
         )
