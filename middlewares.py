@@ -143,30 +143,78 @@ class PreExitVerificationMiddleware(AgentMiddleware):
     """
     Forces the agent to run a verification pass before it's allowed to stop.
 
-    On the first exit attempt, injects a verification prompt.
+    On the first exit attempt, injects a verification prompt that includes
+    the original task requirements extracted from the conversation. This
+    ensures the agent verifies against the ACTUAL spec, not its memory of it.
+
     On the second exit attempt, allows the agent to stop.
 
     This is the harness-level enforcement of self-verification —
     prompt-level instructions alone are not reliable enough.
     """
 
-    def __init__(self, verification_prompt: str | None = None):
+    def __init__(self, verification_prompt: str | None = None,
+                 include_task_requirements: bool = True):
         self._exit_attempts = 0
-        self._verification_prompt = verification_prompt or (
-            "[SYSTEM] MANDATORY VERIFICATION — You are about to finish, but you MUST verify first.\n"
-            "Do NOT just re-read your code. Run actual test/check commands:\n"
-            "1. Re-read the original task specification.\n"
-            "2. For each requirement, run a concrete verification command.\n"
-            "3. Compare actual output against expected output.\n"
-            "4. If anything fails, fix it before stopping.\n"
-            "Only stop after ALL checks pass."
-        )
+        self._verification_prompt = verification_prompt
+        self._include_task_requirements = include_task_requirements
+
+    @staticmethod
+    def _extract_task_requirements(messages: list[dict]) -> str | None:
+        """
+        Extract the original task requirements from the conversation.
+        Looks for the first user message (which contains the task prompt).
+        """
+        for msg in messages:
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                if isinstance(content, str) and len(content) > 20:
+                    # Truncate very long tasks to keep the verification prompt focused
+                    if len(content) > 3000:
+                        content = content[:3000] + "\n... (truncated)"
+                    return content
+        return None
 
     def pre_exit(self, messages: list[dict]) -> str | None:
         self._exit_attempts += 1
         if self._exit_attempts == 1:
             log.info("Pre-exit verification: forcing verification pass")
-            return self._verification_prompt
+
+            # Build the verification prompt with task requirements included
+            parts = []
+            parts.append(
+                "[SYSTEM] MANDATORY VERIFICATION — You are about to finish, "
+                "but you MUST verify your work first."
+            )
+
+            # Include original task requirements if enabled
+            if self._include_task_requirements:
+                task_text = self._extract_task_requirements(messages)
+                if task_text:
+                    parts.append(
+                        "\n--- ORIGINAL TASK REQUIREMENTS (verify against these, not your memory) ---\n"
+                        f"{task_text}\n"
+                        "--- END ORIGINAL TASK REQUIREMENTS ---"
+                    )
+
+            # Add the verification instructions
+            if self._verification_prompt:
+                parts.append(f"\n{self._verification_prompt}")
+            else:
+                parts.append(
+                    "\nDo NOT just re-read your code. Run actual test/check commands:\n"
+                    "1. Go through EACH requirement above one by one.\n"
+                    "2. For each, run a concrete verification command "
+                    "(cat, ls -la, test -f, diff, grep, python3 -c, etc.)\n"
+                    "3. Compare ACTUAL output against what the task asked for.\n"
+                    "4. Pay special attention to exact formats, column orders, "
+                    "file paths, and edge-case rules mentioned in the task.\n"
+                    "5. If ANY check fails, fix it before stopping.\n"
+                    "Think like an automated test script — would your solution pass?"
+                )
+
+            return "\n".join(parts)
+
         # Second exit — allow it
         log.info("Pre-exit verification: agent verified, allowing exit")
         return None

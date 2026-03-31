@@ -153,17 +153,17 @@ Tools: read_file, write_file, list_files, run_bash, delegate_task.
                 ),
                 PreExitVerificationMiddleware(
                     verification_prompt=(
-                        "[SYSTEM] MANDATORY VERIFICATION — You are about to finish, "
-                        "but you MUST verify your work first.\n"
-                        "Switch to REVIEWER mode. Forget what you think you did — check what actually exists:\n"
-                        "1. Re-read the original task requirements (the user prompt, not just spec.md).\n"
-                        "2. For EACH requirement, run a concrete check command "
-                        "(ls -la, cat, test -f, diff, grep, python3 -c, etc.)\n"
-                        "3. Compare ACTUAL output against what the task asked for.\n"
-                        "4. Check exact file paths, exact output formats, exact behavior.\n"
-                        "5. If ANY check fails, fix it before stopping.\n"
-                        "Think like an automated test script — would your solution pass?"
+                        "Switch to REVIEWER mode. Forget what you think you did — "
+                        "check what ACTUALLY exists on disk.\n"
+                        "Go through the requirements above ONE BY ONE:\n"
+                        "1. For each requirement, run a concrete check command "
+                        "(cat the output file, ls -la, diff, grep, python3 -c, etc.)\n"
+                        "2. Compare ACTUAL file contents against what the task asked for.\n"
+                        "3. Pay special attention to: column orders in CSVs, edge directions, "
+                        "exact file paths, numeric formats, and any conditional rules.\n"
+                        "4. If ANY check fails, fix it BEFORE stopping."
                     ),
+                    include_task_requirements=True,
                 ),
                 TimeBudgetMiddleware(
                     budget_seconds=builder_budget,
