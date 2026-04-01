@@ -30,8 +30,18 @@ class TraceWriter:
 
     def __init__(self, agent_name: str):
         self.agent_name = agent_name
-        self._path = Path(config.WORKSPACE) / f"_trace_{agent_name}.jsonl"
         self._start_time = time.time()
+        # Write trace to workspace first; fall back to harness-agent dir
+        trace_dir = Path(config.WORKSPACE)
+        try:
+            trace_dir.mkdir(parents=True, exist_ok=True)
+            test_file = trace_dir / f"_trace_test_{agent_name}"
+            test_file.write_text("test")
+            test_file.unlink()
+            self._path = trace_dir / f"_trace_{agent_name}.jsonl"
+        except Exception:
+            # Workspace not writable, use harness-agent dir
+            self._path = Path(__file__).parent / f"_trace_{agent_name}.jsonl"
 
     def _write(self, event_type: str, data: dict):
         try:
