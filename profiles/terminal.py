@@ -130,9 +130,10 @@ class TerminalProfile(BaseProfile):
         """Dynamic time allocation based on TB2 task timeout and difficulty."""
         meta = self._lookup_task_meta(user_prompt)
         timeout = meta.get("agent_timeout_sec") if meta else self._get("task_budget")
+        difficulty = meta.get("difficulty", "medium") if meta else "medium"
 
-        if timeout <= 900:
-            # 15 min or less — every second counts
+        if timeout <= 900 and difficulty != "hard":
+            # Short + not hard: skip planner, builder gets max time
             return {
                 "planner": 0.0,
                 "builder": 0.95,
@@ -140,8 +141,17 @@ class TerminalProfile(BaseProfile):
                 "planner_enabled": False,
                 "evaluator_enabled": True,
             }
+        elif timeout <= 900 and difficulty == "hard":
+            # Short + hard: keep planner for decomposition, but minimal
+            return {
+                "planner": 0.05,
+                "builder": 0.90,
+                "evaluator": 0.05,
+                "planner_enabled": True,
+                "evaluator_enabled": True,
+            }
         elif timeout <= 1800:
-            # 15-30 min — light planner
+            # Medium timeout
             return {
                 "planner": 0.05,
                 "builder": 0.88,
@@ -150,7 +160,7 @@ class TerminalProfile(BaseProfile):
                 "evaluator_enabled": True,
             }
         else:
-            # 30+ min — full pipeline
+            # Long timeout — full pipeline
             return {
                 "planner": 0.07,
                 "builder": 0.83,
@@ -170,12 +180,37 @@ Workflow:
    - Are there existing tests, scripts, or Makefiles?
    - What does the task actually require?
 2. PLAN: Based on what you found, write a brief step-by-step plan.
+3. DECOMPOSE: If the task has multiple independent parts, mark which steps \
+can be delegated to sub-agents via delegate_task. Use this format:
+
+```
+## Plan
+
+### Step 1: [description]
+- Command: ...
+- Verify: ...
+
+### Step 2: [description] [DELEGATE]
+- Delegate to sub-agent with role: "module_writer"
+- Task: "Write the X module that does Y, save to Z"
+- Verify: ...
+
+### Step 3: [description] [DELEGATE]
+- Delegate to sub-agent with role: "parser_writer"
+- Task: "Write a parser for X format, save to Z"
+- Verify: ...
+
+### Step 4: [description]
+- Command: integrate outputs from steps 2-3
+- Verify: ...
+```
 
 Plan rules:
 - Keep it SHORT — 5-10 steps max.
 - Be specific: list exact commands, file paths, tools needed.
-- Note how to VERIFY each step (what command proves it worked).
-- Note any existing test scripts or verification tools you found.
+- Mark steps as [DELEGATE] only if they are truly independent \
+(no dependency on other delegate steps).
+- Note how to VERIFY each step.
 
 Use write_file to save the plan to spec.md, then stop.
 """,
@@ -207,7 +242,9 @@ not results.txt or output.txt.
 
 PROBLEM-SOLVING STRATEGY:
 1. Plan & Discover: Read spec.md, scan the codebase, understand the task.
-2. Build: Implement step by step.
+2. Build: Implement step by step. For steps marked [DELEGATE] in spec.md, \
+use delegate_task to run them in isolated sub-agents. Example:
+   delegate_task(task="Write a BPE tokenizer in C, save to tokenizer.c", role="module_writer")
 3. Verify: Run tests, read FULL output, compare against task spec (not your code).
 4. Fix: If anything fails, re-read the original spec and fix.
 
