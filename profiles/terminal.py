@@ -166,7 +166,7 @@ Tools: read_file, write_file, list_files, run_bash, delegate_task.
                     include_task_requirements=True,
                 ),
                 TimeBudgetMiddleware(
-                    budget_seconds=builder_budget,
+                    budget_seconds=self._get("task_budget"),
                     warn_threshold=self._get("time_warn_threshold"),
                     critical_threshold=self._get("time_critical_threshold"),
                 ),

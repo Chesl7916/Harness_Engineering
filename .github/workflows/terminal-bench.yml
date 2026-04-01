@@ -61,6 +61,15 @@ jobs:
             --retry-include AddTestsDirError \
             $TASK_ARGS
 
+      - name: Sanitize logs before upload
+        if: always()
+        run: |
+          find jobs/ -name "*.log" -o -name "*.txt" -o -name "*.json" | \
+            xargs -I{} sed -i \
+              -e 's/sk-or-v1-[a-zA-Z0-9]*/sk-***REDACTED***/g' \
+              -e 's/sk-[a-zA-Z0-9]\{20,\}/sk-***REDACTED***/g' \
+              {} 2>/dev/null || true
+
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4

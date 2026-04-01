@@ -231,6 +231,10 @@ class TimeBudgetMiddleware(AgentMiddleware):
     At configurable thresholds (default: 60% and 85% of budget),
     warns the agent about remaining time and nudges it toward
     wrapping up and verifying.
+
+    Can track time from harness start (not just agent start) by calling
+    sync_start_time() before the agent runs. This ensures the budget
+    accounts for time already spent on planning/setup.
     """
 
     def __init__(self, budget_seconds: float,
@@ -243,10 +247,24 @@ class TimeBudgetMiddleware(AgentMiddleware):
         self._warned = False
         self._critical = False
 
+    def sync_start_time(self, harness_start: float):
+        """Set start time to harness start, so budget includes planning/setup time."""
+        self.start_time = harness_start
+
     def per_iteration(self, iteration: int, messages: list[dict]) -> str | None:
         elapsed = time.time() - self.start_time
         fraction = elapsed / self.budget_seconds
         remaining = self.budget_seconds - elapsed
+
+        if remaining <= 0:
+            if not self._critical:
+                self._critical = True
+                log.warning("Time budget EXPIRED")
+                return (
+                    "[SYSTEM] ⚠️ TIME IS UP. You have exceeded the time budget.\n"
+                    "STOP immediately. Save whatever you have and finish NOW."
+                )
+            return None
 
         if fraction >= self.critical_threshold and not self._critical:
             self._critical = True
