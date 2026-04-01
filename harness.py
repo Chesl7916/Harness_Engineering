@@ -170,8 +170,8 @@ class Harness:
             for mw in self.builder.middlewares:
                 if isinstance(mw, TimeBudgetMiddleware):
                     mw.sync_start_time(total_start)
-                    # Try to set budget from TB2 task metadata
-                    task_timeout = self._lookup_task_timeout(user_prompt)
+                    # Let the profile resolve task-specific timeout
+                    task_timeout = self.profile.resolve_task_timeout(user_prompt)
                     if task_timeout:
                         mw.budget_seconds = task_timeout
                         log.info(f"Time budget set to {task_timeout}s from task metadata")
@@ -227,51 +227,6 @@ class Harness:
         log.info(f"HARNESS COMPLETE — total time: {total_duration / 60:.1f} minutes")
         log.info(f"Output in: {config.WORKSPACE}")
         log.info("=" * 60)
-
-    # Cache for TB2 task metadata
-    _tb2_tasks: dict | None = None
-
-    @classmethod
-    def _load_tb2_tasks(cls) -> dict:
-        """Load TB2 task metadata (timeout, difficulty, category) from bundled JSON."""
-        if cls._tb2_tasks is None:
-            import json
-            tb2_path = Path(__file__).parent / "benchmarks" / "tb2_tasks.json"
-            if tb2_path.exists():
-                cls._tb2_tasks = json.loads(tb2_path.read_text(encoding="utf-8"))
-            else:
-                cls._tb2_tasks = {}
-        return cls._tb2_tasks
-
-    def _lookup_task_timeout(self, user_prompt: str) -> float | None:
-        """Try to match a TB2 task name from the user prompt and return its timeout.
-
-        Matching strategy: check if any known task name appears in the
-        workspace path or user prompt. Works because Harbor passes the
-        task instruction as the user prompt.
-        """
-        tasks = self._load_tb2_tasks()
-        if not tasks:
-            return None
-
-        # Check workspace path first (most reliable)
-        ws_lower = config.WORKSPACE.lower()
-        for task_name, meta in tasks.items():
-            if task_name in ws_lower:
-                return meta.get("agent_timeout_sec")
-
-        # Check user prompt — match task name with both hyphens and spaces
-        prompt_lower = user_prompt.lower()
-        for task_name, meta in tasks.items():
-            if len(task_name) > 6 and (
-                task_name in prompt_lower or
-                task_name.replace("-", " ") in prompt_lower or
-                task_name.replace("-", "_") in prompt_lower
-            ):
-                return meta.get("agent_timeout_sec")
-
-        # No match — return None, harness will use default budget
-        return None
 
     def _negotiate_contract(self, round_num: int, max_iterations: int = 3) -> None:
         self.contract_proposer.run(

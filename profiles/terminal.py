@@ -80,6 +80,47 @@ class TerminalProfile(BaseProfile):
     def description(self) -> str:
         return "Solve terminal/CLI tasks (Terminal-Bench-2 style)"
 
+    # --- TB2 task metadata for dynamic timeout ---
+    _tb2_tasks: dict | None = None
+
+    @classmethod
+    def _load_tb2_tasks(cls) -> dict:
+        """Load TB2 task metadata from bundled JSON."""
+        if cls._tb2_tasks is None:
+            import json
+            from pathlib import Path
+            tb2_path = Path(__file__).parent.parent / "benchmarks" / "tb2_tasks.json"
+            if tb2_path.exists():
+                cls._tb2_tasks = json.loads(tb2_path.read_text(encoding="utf-8"))
+            else:
+                cls._tb2_tasks = {}
+        return cls._tb2_tasks
+
+    def resolve_task_timeout(self, user_prompt: str) -> float | None:
+        """Look up TB2 task timeout by matching task name in prompt or workspace path."""
+        import config as _cfg
+        tasks = self._load_tb2_tasks()
+        if not tasks:
+            return None
+
+        # Check workspace path first (most reliable)
+        ws_lower = _cfg.WORKSPACE.lower()
+        for task_name, meta in tasks.items():
+            if task_name in ws_lower:
+                return meta.get("agent_timeout_sec")
+
+        # Check user prompt
+        prompt_lower = user_prompt.lower()
+        for task_name, meta in tasks.items():
+            if len(task_name) > 6 and (
+                task_name in prompt_lower or
+                task_name.replace("-", " ") in prompt_lower or
+                task_name.replace("-", "_") in prompt_lower
+            ):
+                return meta.get("agent_timeout_sec")
+
+        return None
+
     def planner(self) -> AgentConfig:
         return AgentConfig(
             system_prompt="""\

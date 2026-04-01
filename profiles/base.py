@@ -175,3 +175,14 @@ class BaseProfile(ABC):
             vals = [float(s) for s in scores]
             return sum(vals) / len(vals)
         return 0.0
+
+    def resolve_task_timeout(self, user_prompt: str) -> float | None:
+        """
+        Resolve the actual timeout for a task based on the user prompt.
+
+        Override in subclasses that have task-specific timeout metadata
+        (e.g. terminal profile uses TB2 task.toml data).
+
+        Returns timeout in seconds, or None to use the default budget.
+        """
+        return None
