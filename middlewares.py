@@ -143,14 +143,14 @@ class PreExitVerificationMiddleware(AgentMiddleware):
     """
     Forces the agent to run a verification pass before it's allowed to stop.
 
-    On the first exit attempt, injects a verification prompt that includes
-    the original task requirements extracted from the conversation. This
-    ensures the agent verifies against the ACTUAL spec, not its memory of it.
+    Three-level exit gate:
+    1. First exit attempt with NO tool calls ever made → force agent to start working
+    2. First exit attempt after some work → force verification pass
+    3. Second exit attempt after verification → allow exit
 
-    On the second exit attempt, allows the agent to stop.
-
-    This is the harness-level enforcement of self-verification —
-    prompt-level instructions alone are not reliable enough.
+    This prevents the "3-second exit" problem where weak models return text
+    without calling any tools, and PreExitVerification lets them go after
+    just one retry.
     """
 
     def __init__(self, verification_prompt: str | None = None,
@@ -160,16 +160,24 @@ class PreExitVerificationMiddleware(AgentMiddleware):
         self._include_task_requirements = include_task_requirements
 
     @staticmethod
+    def _has_done_work(messages: list[dict]) -> bool:
+        """Check if the agent has called any action tools (run_bash, write_file, delegate_task)."""
+        action_tools = {"run_bash", "write_file", "delegate_task"}
+        for msg in messages:
+            if msg.get("role") == "assistant":
+                for tc in msg.get("tool_calls", []):
+                    fn_name = tc.get("function", {}).get("name", "")
+                    if fn_name in action_tools:
+                        return True
+        return False
+
+    @staticmethod
     def _extract_task_requirements(messages: list[dict]) -> str | None:
-        """
-        Extract the original task requirements from the conversation.
-        Looks for the first user message (which contains the task prompt).
-        """
+        """Extract the original task requirements from the conversation."""
         for msg in messages:
             if msg.get("role") == "user":
                 content = msg.get("content", "")
                 if isinstance(content, str) and len(content) > 20:
-                    # Truncate very long tasks to keep the verification prompt focused
                     if len(content) > 3000:
                         content = content[:3000] + "\n... (truncated)"
                     return content
@@ -177,17 +185,33 @@ class PreExitVerificationMiddleware(AgentMiddleware):
 
     def pre_exit(self, messages: list[dict]) -> str | None:
         self._exit_attempts += 1
+        has_worked = self._has_done_work(messages)
+
+        # Gate 1: Agent hasn't done ANY work — force it to start
+        if not has_worked:
+            log.warning(f"Pre-exit: agent wants to stop but has done NO work (attempt {self._exit_attempts})")
+            if self._exit_attempts <= 3:  # give up to 3 chances to start working
+                return (
+                    "[SYSTEM] You have NOT completed the task. You have not executed any commands "
+                    "or written any files yet.\n"
+                    "You MUST use run_bash to execute commands and write_file to create output files.\n"
+                    "Read the task requirements again and START WORKING. Do not just describe "
+                    "what you would do — actually DO it using the available tools."
+                )
+            # After 3 attempts with no work, give up
+            log.error("Pre-exit: agent refused to work after 3 attempts")
+            return None
+
+        # Gate 2: Agent has done work, first exit → force verification
         if self._exit_attempts == 1:
             log.info("Pre-exit verification: forcing verification pass")
 
-            # Build the verification prompt with task requirements included
             parts = []
             parts.append(
                 "[SYSTEM] MANDATORY VERIFICATION — You are about to finish, "
                 "but you MUST verify your work first."
             )
 
-            # Include original task requirements if enabled
             if self._include_task_requirements:
                 task_text = self._extract_task_requirements(messages)
                 if task_text:
@@ -197,7 +221,6 @@ class PreExitVerificationMiddleware(AgentMiddleware):
                         "--- END ORIGINAL TASK REQUIREMENTS ---"
                     )
 
-            # Add the verification instructions
             if self._verification_prompt:
                 parts.append(f"\n{self._verification_prompt}")
             else:
@@ -215,7 +238,7 @@ class PreExitVerificationMiddleware(AgentMiddleware):
 
             return "\n".join(parts)
 
-        # Second exit — allow it
+        # Gate 3: Agent has done work and verified → allow exit
         log.info("Pre-exit verification: agent verified, allowing exit")
         return None
 
