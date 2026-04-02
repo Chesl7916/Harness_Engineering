@@ -366,11 +366,15 @@ Use write_file to save to feedback.md, then stop.
         if meta:
             difficulty = meta.get("difficulty", "unknown")
             timeout = meta.get("agent_timeout_sec", 900)
-            mins = int(timeout / 60)
+            # Estimate actual builder time: total timeout minus setup/planner/evaluator overhead
+            alloc = self.resolve_time_allocation(user_prompt)
+            builder_time = int(timeout * alloc.get("builder", 0.85) / 60)
+            total_mins = int(timeout / 60)
 
             if difficulty == "hard" or timeout >= 1800:
                 strategy_hint = (
-                    f"\n\n--- STRATEGY HINT (time limit: {mins} min, difficulty: {difficulty}) ---\n"
+                    f"\n\n--- STRATEGY HINT (total timeout: {total_mins} min, "
+                    f"your budget: ~{builder_time} min, difficulty: {difficulty}) ---\n"
                     "This is a complex task. Consider breaking it into independent subtasks:\n"
                     "- Use delegate_task to handle isolated pieces in parallel "
                     "(e.g. one sub-agent writes a parser, another writes the core logic).\n"
@@ -381,13 +385,15 @@ Use write_file to save to feedback.md, then stop.
                 )
             elif difficulty == "easy":
                 strategy_hint = (
-                    f"\n\n--- STRATEGY HINT (time limit: {mins} min, difficulty: {difficulty}) ---\n"
+                    f"\n\n--- STRATEGY HINT (your budget: ~{builder_time} min, "
+                    f"difficulty: {difficulty}) ---\n"
                     "This is a straightforward task. Execute directly — don't overthink.\n"
                     "--- END STRATEGY HINT ---\n"
                 )
             else:
                 strategy_hint = (
-                    f"\n\n--- STRATEGY HINT (time limit: {mins} min, difficulty: {difficulty}) ---\n"
+                    f"\n\n--- STRATEGY HINT (total timeout: {total_mins} min, "
+                    f"your budget: ~{builder_time} min, difficulty: {difficulty}) ---\n"
                     "Work methodically: implement, test, verify. Use delegate_task if "
                     "the task has clearly separable parts.\n"
                     "--- END STRATEGY HINT ---\n"
