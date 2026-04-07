@@ -321,54 +321,141 @@ class TimeBudgetMiddleware(AgentMiddleware):
 
 class TaskTrackingMiddleware(AgentMiddleware):
     """
-    Encourages the agent to maintain explicit task tracking for multi-step work.
+    Enforces explicit task tracking for multi-step work via _todo.md.
 
-    After the agent has made several tool calls without writing any tracking
-    artifact, injects a reminder to decompose and track progress.
+    Inspired by ForgeCode's todo_write enforcement — their single biggest
+    improvement (38% → 66% on TB2). The key insight: optional planning tools
+    get deprioritized under pressure. Making tracking mandatory prevents the
+    agent from losing track of steps in complex tasks.
 
-    Inspired by ForgeCode's todo_write enforcement, which was their single
-    biggest improvement (38% → 66% on TB2).
+    Behavior:
+    1. After the first few tool calls, if no _todo.md exists, inject a
+       MANDATORY instruction to create one with a checklist.
+    2. Periodically check that _todo.md is being updated. If the agent
+       has made many tool calls without updating it, remind it.
+    3. The _todo.md file lives in the workspace and persists across
+       context compaction/reset (unlike mental checklists).
 
-    This is a softer version — it nudges rather than hard-blocks, since
-    not all tasks need decomposition. But for complex multi-step tasks,
-    the nudge is enough to trigger the behavior.
+    This is NOT a soft nudge. The injection uses [MANDATORY] framing
+    and includes the original task requirements for reference.
     """
 
-    def __init__(self, nudge_after_n_tools: int = 8):
-        self.nudge_after_n_tools = nudge_after_n_tools
+    # How many tool calls before we demand a todo list
+    DEMAND_AFTER = 4
+    # How many tool calls between update reminders
+    UPDATE_INTERVAL = 12
+
+    def __init__(self, nudge_after_n_tools: int = 4):
+        self.DEMAND_AFTER = nudge_after_n_tools
         self.tool_call_count = 0
-        self._nudged = False
+        self._todo_created = False
+        self._last_update_check = 0
+        self._todo_content_hash: int = 0
 
-    def post_tool(self, tool_name: str, tool_args: dict, result: str,
-                  messages: list[dict]) -> str | None:
-        self.tool_call_count += 1
+    def _todo_exists(self) -> bool:
+        """Check if _todo.md exists in the workspace."""
+        import config as _cfg
+        from pathlib import Path
+        return (Path(_cfg.WORKSPACE) / "_todo.md").exists()
 
-        if self._nudged or self.tool_call_count < self.nudge_after_n_tools:
-            return None
+    def _read_todo(self) -> str:
+        """Read current _todo.md content."""
+        import config as _cfg
+        from pathlib import Path
+        p = Path(_cfg.WORKSPACE) / "_todo.md"
+        if p.exists():
+            return p.read_text(encoding="utf-8", errors="replace")
+        return ""
 
-        # Check if agent has already written any tracking/progress notes
-        for msg in messages:
-            content = msg.get("content", "")
-            if isinstance(content, str) and "progress" in content.lower():
-                # Agent seems to be tracking already
-                return None
-            # Check if agent wrote to a tracking file
+    def _has_written_todo(self, messages: list[dict]) -> bool:
+        """Check if agent has written to _todo.md in recent messages."""
+        for msg in reversed(messages[-10:]):
             if msg.get("role") == "assistant":
                 for tc in msg.get("tool_calls", []):
                     fn = tc.get("function", {})
                     if fn.get("name") == "write_file":
                         args_str = fn.get("arguments", "")
-                        if any(kw in args_str.lower() for kw in ["todo", "progress", "checklist", "tracker"]):
-                            return None
+                        if "_todo" in args_str.lower() or "todo" in args_str.lower():
+                            return True
+        return False
 
-        self._nudged = True
-        log.info("Task tracking: nudging agent to track progress")
-        return (
-            "[SYSTEM] You have made several tool calls. For complex tasks, "
-            "tracking your progress helps avoid skipping steps or repeating work.\n"
-            "Consider: What steps remain? What have you completed? What still needs verification?\n"
-            "Keep a mental checklist and verify each requirement before finishing."
-        )
+    def _extract_task_text(self, messages: list[dict]) -> str:
+        """Extract the original task description from messages."""
+        for msg in messages:
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                if isinstance(content, str) and len(content) > 50:
+                    # Truncate to avoid bloating the injection
+                    return content[:2000]
+        return ""
+
+    def post_tool(self, tool_name: str, tool_args: dict, result: str,
+                  messages: list[dict]) -> str | None:
+        self.tool_call_count += 1
+
+        # Track if agent just wrote _todo.md
+        if tool_name == "write_file":
+            path = tool_args.get("path", "")
+            if "todo" in path.lower():
+                self._todo_created = True
+                self._last_update_check = self.tool_call_count
+                content = tool_args.get("content", "")
+                self._todo_content_hash = hash(content)
+                return None
+
+        # Phase 1: Demand todo creation after DEMAND_AFTER tool calls
+        if not self._todo_created and self.tool_call_count >= self.DEMAND_AFTER:
+            # Check if it exists on disk (maybe created via run_bash)
+            if self._todo_exists():
+                self._todo_created = True
+                self._todo_content_hash = hash(self._read_todo())
+                self._last_update_check = self.tool_call_count
+                return None
+
+            # Also check if agent wrote it recently but we missed it
+            if self._has_written_todo(messages):
+                self._todo_created = True
+                self._last_update_check = self.tool_call_count
+                return None
+
+            log.warning("Task tracking: DEMANDING todo creation")
+            task_text = self._extract_task_text(messages)
+            return (
+                "[MANDATORY] You have been working without a task checklist. "
+                "Before your next action, you MUST create _todo.md with a checklist "
+                "of ALL remaining steps to complete this task.\n\n"
+                "Use write_file to create _todo.md with this format:\n"
+                "```\n"
+                "# Task Checklist\n"
+                "- [ ] Step 1: <description>\n"
+                "- [ ] Step 2: <description>\n"
+                "- [x] Step 3: <already done>\n"
+                "```\n\n"
+                "Mark steps you've already completed with [x]. "
+                "This file persists even if your context is reset.\n\n"
+                f"Original task for reference:\n{task_text[:1000]}"
+            )
+
+        # Phase 2: Periodic update reminders
+        if self._todo_created:
+            calls_since_update = self.tool_call_count - self._last_update_check
+            if calls_since_update >= self.UPDATE_INTERVAL:
+                self._last_update_check = self.tool_call_count
+
+                # Check if content actually changed
+                current = self._read_todo()
+                current_hash = hash(current)
+                if current_hash == self._todo_content_hash and current:
+                    log.info("Task tracking: todo not updated, reminding")
+                    self._todo_content_hash = current_hash
+                    return (
+                        "[SYSTEM] You have made many tool calls since last updating "
+                        "_todo.md. Read it now, mark completed steps with [x], "
+                        "and update any steps that changed. This keeps you on track."
+                    )
+                self._todo_content_hash = current_hash
+
+        return None
 
 
 # ---------------------------------------------------------------------------

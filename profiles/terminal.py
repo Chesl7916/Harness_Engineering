@@ -68,7 +68,7 @@ class TerminalProfile(BaseProfile):
         "max_rounds": 2,
         "loop_file_edit_threshold": 4,
         "loop_command_repeat_threshold": 3,
-        "task_tracking_nudge_after": 8,
+        "task_tracking_nudge_after": 4,
         "time_warn_threshold": 0.45,
         "time_critical_threshold": 0.75,
     }
@@ -267,7 +267,10 @@ PROBLEM-SOLVING STRATEGY:
 bioinformatics, specific protocols, niche file formats), use web_search \
 BEFORE writing code. Look for reference implementations, algorithms, or \
 libraries. 5 minutes of research can save 10 minutes of dead-end coding.
-3. Build: Implement step by step. For steps marked [DELEGATE] in spec.md, \
+3. Track: For multi-step tasks, create _todo.md with a checklist of all steps. \
+Mark steps [x] as you complete them. Update it as you go. This file survives \
+context resets and keeps you from losing track of what's done and what remains.
+4. Build: Implement step by step. For steps marked [DELEGATE] in spec.md, \
 use delegate_task to run them in isolated sub-agents. Example:
    delegate_task(task="Write a BPE tokenizer in C, save to tokenizer.c", role="module_writer")
 4. Verify: Run tests, read FULL output, compare against task spec (not your code).
