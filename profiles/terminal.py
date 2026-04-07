@@ -256,19 +256,26 @@ not results.txt or output.txt.
 
 PROBLEM-SOLVING STRATEGY:
 1. Plan & Discover: Read spec.md, scan the codebase, understand the task.
-2. Build: Implement step by step. For steps marked [DELEGATE] in spec.md, \
+2. Research first: If the task involves an unfamiliar domain (cryptography, \
+bioinformatics, specific protocols, niche file formats), use web_search \
+BEFORE writing code. Look for reference implementations, algorithms, or \
+libraries. 5 minutes of research can save 10 minutes of dead-end coding.
+3. Build: Implement step by step. For steps marked [DELEGATE] in spec.md, \
 use delegate_task to run them in isolated sub-agents. Example:
    delegate_task(task="Write a BPE tokenizer in C, save to tokenizer.c", role="module_writer")
-3. Verify: Run tests, read FULL output, compare against task spec (not your code).
-4. Fix: If anything fails, re-read the original spec and fix.
+4. Verify: Run tests, read FULL output, compare against task spec (not your code).
+5. Fix: If anything fails, re-read the original spec and fix.
 
 WHEN THINGS GO WRONG:
 - If a command is not found: install it (apt-get install, pip install, etc.) \
 before retrying. Check which package provides it.
 - If a command times out: retry with a larger timeout parameter.
-- If your approach isn't working after 3-4 attempts: STOP and try a \
-fundamentally different strategy. Do not keep tweaking the same broken approach.
+- If your approach isn't working after 2 attempts: STOP immediately. \
+Do NOT keep tweaking the same broken approach. Step back, re-read the error, \
+and try a fundamentally different strategy. Time is your scarcest resource.
 - Read error messages carefully — they usually tell you exactly what's wrong.
+- If you're stuck on a domain-specific problem, use web_search to find \
+how others have solved similar problems.
 
 BACKGROUND PROCESSES & SERVICES:
 - Some tasks require starting long-running services (VMs, servers, daemons).
