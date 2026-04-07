@@ -448,9 +448,77 @@ Use write_file to save to feedback.md, then stop.
             f"{env_section}"
             f"{strategy_hint}"
         )
+
+        # Auto-inject matching skill content (if any)
+        skill_section = self._match_and_load_skill(user_prompt)
+        if skill_section:
+            task += skill_section
+
         if prev_feedback:
             task += (
                 f"\n\nYour previous attempt had issues. "
                 f"Read feedback.md and fix them. Be precise."
             )
         return task
+
+    def _match_and_load_skill(self, user_prompt: str) -> str:
+        """Auto-match a skill to the current task and return its content for injection.
+
+        Matching strategy (first match wins):
+        1. Exact task name match: skill directory name appears in workspace path
+        2. Keyword overlap: skill description words overlap with task prompt
+
+        Returns the skill content wrapped in a section header, or empty string.
+        Only injects ONE skill to avoid context bloat.
+        """
+        import config as _cfg
+        from pathlib import Path
+
+        skills_dir = Path(__file__).parent.parent / "skills"
+        if not skills_dir.is_dir():
+            return ""
+
+        ws_lower = _cfg.WORKSPACE.lower()
+        prompt_lower = user_prompt.lower()
+
+        # Strategy 1: Exact name match against workspace path
+        for skill_dir in sorted(skills_dir.iterdir()):
+            if not skill_dir.is_dir():
+                continue
+            skill_name = skill_dir.name
+            if len(skill_name) > 5 and skill_name in ws_lower:
+                return self._load_skill_content(skill_dir / "SKILL.md", skill_name)
+
+        # Strategy 2: Exact name match against prompt text
+        for skill_dir in sorted(skills_dir.iterdir()):
+            if not skill_dir.is_dir():
+                continue
+            skill_name = skill_dir.name
+            if len(skill_name) > 5 and (
+                skill_name in prompt_lower
+                or skill_name.replace("-", " ") in prompt_lower
+                or skill_name.replace("-", "_") in prompt_lower
+            ):
+                return self._load_skill_content(skill_dir / "SKILL.md", skill_name)
+
+        return ""
+
+    @staticmethod
+    def _load_skill_content(skill_path, skill_name: str) -> str:
+        """Load a SKILL.md file and wrap it for injection into the task prompt."""
+        from pathlib import Path
+        p = Path(skill_path)
+        if not p.exists():
+            return ""
+        content = p.read_text(encoding="utf-8", errors="replace")
+        # Strip YAML frontmatter
+        import re
+        content = re.sub(r"^---\s*\n.*?\n---\s*\n", "", content, flags=re.DOTALL)
+        # Cap at 8000 chars to avoid context bloat
+        if len(content) > 8000:
+            content = content[:8000] + "\n... (skill guide truncated)"
+        return (
+            f"\n\n--- SKILL GUIDE: {skill_name} (auto-loaded, follow this guidance) ---\n"
+            f"{content.strip()}\n"
+            f"--- END SKILL GUIDE ---\n"
+        )
