@@ -210,8 +210,19 @@ class Agent:
             try:
                 response = client.chat.completions.create(**kwargs)
             except Exception as e:
+                err_str = str(e)
+                trace.error("api_error", err_str)
+
+                # Rate limits get longer backoff and don't count toward abort threshold
+                if "rate_limit" in err_str.lower() or "429" in err_str:
+                    import random
+                    wait = min(2 ** (consecutive_errors + 2), 120) + random.uniform(0, 5)
+                    log.warning(f"[{self.name}] Rate limited, waiting {wait:.1f}s...")
+                    time.sleep(wait)
+                    # Don't increment consecutive_errors — rate limits are transient
+                    continue
+
                 log.error(f"[{self.name}] API error: {e}")
-                trace.error("api_error", str(e))
                 consecutive_errors += 1
                 if consecutive_errors >= config.MAX_TOOL_ERRORS:
                     log.error(f"[{self.name}] Too many API errors, aborting.")
@@ -320,17 +331,31 @@ class Agent:
             if choice.finish_reason == "length":
                 log.warning(f"[{self.name}] Output truncated (max_tokens hit).")
                 trace.error("length_truncated", "max_tokens hit")
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "[SYSTEM] Your last response was cut off because it exceeded the token limit. "
-                        "The tool call was NOT executed. "
-                        "Please retry, but split large files into smaller parts:\n"
-                        "1. Write the first half of the file with write_file\n"
-                        "2. Then write the second half as a separate file or append\n"
-                        "Or simplify the implementation to fit in one response."
-                    ),
-                })
+                # If tool calls were present, they were already executed above.
+                # Only tell the model they weren't executed if none were parsed
+                # (i.e. the truncation cut off the tool call JSON itself).
+                if msg.tool_calls:
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[SYSTEM] Your response was truncated (token limit), but your tool calls "
+                            "WERE executed successfully. The results are above. "
+                            "If you had more tool calls planned, continue with the remaining ones now. "
+                            "Do NOT re-run the tools that already executed."
+                        ),
+                    })
+                else:
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[SYSTEM] Your last response was cut off because it exceeded the token limit. "
+                            "No tool calls were executed. "
+                            "Please retry, but split large files into smaller parts:\n"
+                            "1. Write the first half of the file with write_file\n"
+                            "2. Then write the second half as a separate file or append\n"
+                            "Or simplify the implementation to fit in one response."
+                        ),
+                    })
 
         else:
             log.warning(f"[{self.name}] Hit max iterations ({config.MAX_AGENT_ITERATIONS}).")

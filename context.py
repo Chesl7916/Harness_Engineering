@@ -142,8 +142,15 @@ def compact_messages(messages: list[dict], llm_call, role: str = "default") -> l
     non_system = messages[len(system):]
 
     keep_count = max(4, int(len(non_system) * retention))
-    old = non_system[:-keep_count]
-    recent = non_system[-keep_count:]
+
+    # Adjust the split point so we never cut between an assistant message
+    # with tool_calls and its corresponding tool response messages.
+    # The OpenAI API requires tool results to immediately follow the
+    # assistant message that requested them.
+    split_idx = len(non_system) - keep_count
+    split_idx = _safe_split_index(non_system, split_idx)
+    old = non_system[:split_idx]
+    recent = non_system[split_idx:]
 
     if not old:
         return messages
@@ -180,6 +187,31 @@ def compact_messages(messages: list[dict], llm_call, role: str = "default") -> l
     }
 
     return system + [summary_msg] + recent
+
+
+def _safe_split_index(messages: list[dict], target_idx: int) -> int:
+    """Find a safe split point that doesn't break tool_call/tool message pairs.
+
+    Scans backward from target_idx to find a position where the message
+    at target_idx is NOT a 'tool' response (which must stay with its
+    preceding assistant message).
+    """
+    idx = max(0, min(target_idx, len(messages)))
+
+    # Walk backward until we're not inside a tool_call/tool pair
+    while idx > 0 and idx < len(messages):
+        msg = messages[idx]
+        if msg.get("role") == "tool":
+            # This is a tool response — can't split here, move back
+            idx -= 1
+        elif msg.get("role") == "assistant" and msg.get("tool_calls"):
+            # This assistant message has tool_calls — its tool responses
+            # follow it, so we can't split here either. Move back.
+            idx -= 1
+        else:
+            break
+
+    return idx
 
 
 # ---------------------------------------------------------------------------
