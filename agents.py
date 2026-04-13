@@ -216,11 +216,15 @@ class Agent:
             kwargs = dict(
                 model=config.MODEL,
                 messages=messages,
-                max_tokens=32768,
+                max_tokens=16384,
             )
             if self.use_tools:
                 kwargs["tools"] = tools.TOOL_SCHEMAS + self.extra_tool_schemas
                 kwargs["tool_choice"] = "auto"
+                # Enable parallel tool calls — the model can issue multiple
+                # independent tool calls in a single response. This is the
+                # single biggest throughput win from Claude Code's architecture.
+                kwargs["parallel_tool_calls"] = True
 
             try:
                 response = client.chat.completions.create(**kwargs)
@@ -359,8 +363,11 @@ class Agent:
                 for mw in self.middlewares:
                     inject = mw.post_tool(fn_name, fn_args, result, messages)
                     if inject:
-                        messages.append({"role": "user", "content": inject})
-                        trace.middleware_inject(type(mw).__name__, "post_tool", inject)
+                        # For parallel tool calls, only inject AFTER the last tool
+                        # to avoid breaking the tool_call/tool_result sequence
+                        if tc == msg.tool_calls[-1]:
+                            messages.append({"role": "user", "content": inject})
+                            trace.middleware_inject(type(mw).__name__, "post_tool", inject)
                         break
 
             # --- Check finish reason ---

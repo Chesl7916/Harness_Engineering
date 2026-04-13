@@ -270,12 +270,21 @@ checking system state, and any shell operation.
 for reading files — use read_file instead.
 - write_file: Create new files or overwrite existing ones. Do NOT use echo/cat heredoc \
 via run_bash — use write_file instead.
+- edit_file: PREFERRED for modifying existing files — replaces a specific string, \
+leaving the rest untouched. Ideal for filling in TODO/skeleton code.
 - list_files: List directory contents. Do NOT use find/ls via run_bash for simple listing.
 - delegate_task: Spawn isolated sub-agent for independent subtasks that would bloat context.
 - web_search / web_fetch: Research unfamiliar domains BEFORE coding.
 - read_skill_file: Load a skill guide if one matches your task (see catalog below).
 - For long-running commands (compilation, training), increase the timeout parameter.
 - For background services, use '... &' and poll for readiness.
+- You can call MULTIPLE tools in a single response. If operations are independent \
+(e.g. read two files, install a package AND read a file), issue all tool calls at \
+once — do NOT wait for one to finish before starting the next.
+
+When working with tool results, briefly note key information (file paths, error \
+messages, important values) in your text response — older tool results may be \
+cleared from context later.
 
 # Workflow
 1. DISCOVER: Run `ls -la` to see what exists. Read existing code files.

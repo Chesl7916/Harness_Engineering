@@ -430,15 +430,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": (
-                "Read the contents of a file in the workspace. "
-                "Returns the full file content (up to 60K chars). "
-                "For very large files, use run_bash with head/tail/sed to read specific portions.\n\n"
-                "Usage:\n"
-                "- Use this to understand existing code before modifying it.\n"
-                "- ALWAYS read a file before editing it with edit_file or write_file.\n"
-                "- For binary files, use run_bash with appropriate tools (xxd, file, etc.)."
-            ),
+            "description": "Read a file from the workspace.",
             "parameters": {
                 "type": "object",
                 "required": ["path"],
@@ -452,47 +444,12 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_skill_file",
-            "description": "Read a skill file from the skills/ directory. Use this to load a skill's SKILL.md or any sub-files referenced within it. Path should be relative to project root (e.g. 'skills/frontend-design/SKILL.md').",
+            "description": "Read a skill guide from the skills/ directory (e.g. 'skills/frontend-design/SKILL.md').",
             "parameters": {
                 "type": "object",
                 "required": ["path"],
                 "properties": {
-                    "path": {"type": "string", "description": "Relative path to skill file (e.g. 'skills/frontend-design/SKILL.md')"}
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "edit_file",
-            "description": (
-                "Make a targeted edit to an existing file by replacing an exact string match. "
-                "This is the PREFERRED tool for modifying existing files — it only changes "
-                "the specific part you target, leaving the rest untouched.\n\n"
-                "Usage:\n"
-                "- You MUST read the file first with read_file before editing.\n"
-                "- old_string must match EXACTLY one location in the file (including whitespace and indentation).\n"
-                "- If old_string matches multiple locations, the edit will fail. Add more surrounding "
-                "context to make it unique.\n"
-                "- To create a new file, use old_string=\"\" and put the full content in new_string.\n"
-                "- PREFER this over write_file for modifying existing files — it's safer and uses less tokens.\n"
-                "- This is especially useful for filling in TODO/skeleton code: read the file, find the "
-                "TODO block, and replace it with your implementation."
-            ),
-            "parameters": {
-                "type": "object",
-                "required": ["path", "old_string", "new_string"],
-                "properties": {
-                    "path": {"type": "string", "description": "Relative path to the file to edit"},
-                    "old_string": {
-                        "type": "string",
-                        "description": "The exact string to find and replace. Must match exactly one location in the file. Use empty string to create a new file.",
-                    },
-                    "new_string": {
-                        "type": "string",
-                        "description": "The replacement string.",
-                    },
+                    "path": {"type": "string", "description": "Relative path to skill file from project root"}
                 },
             },
         },
@@ -501,16 +458,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": (
-                "Create a new file or completely overwrite an existing file. "
-                "For modifying existing files, PREFER edit_file instead — it only sends the diff "
-                "and is less error-prone.\n\n"
-                "Usage:\n"
-                "- Use this to create NEW files that don't exist yet.\n"
-                "- Use this for complete rewrites where edit_file would be impractical.\n"
-                "- IMPORTANT: If skeleton/template files already exist with TODO markers, "
-                "use edit_file to fill in the TODOs instead of rewriting the entire file."
-            ),
+            "description": "Create or overwrite a file in the workspace.",
             "parameters": {
                 "type": "object",
                 "required": ["path", "content"],
@@ -525,7 +473,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "list_files",
-            "description": "List all files in a directory recursively. Returns up to 200 file paths.",
+            "description": "List all files in a directory recursively.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -542,24 +490,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "run_bash",
-            "description": (
-                "Execute a shell command in the workspace directory. This is your PRIMARY tool "
-                "for getting things done.\n\n"
-                "Usage:\n"
-                "- Use for: installing packages, compiling code, running tests, starting services, "
-                "checking system state, and any command-line operation.\n"
-                "- The working directory is the workspace root. Use relative paths or cd as needed.\n"
-                "- For long-running commands (compilation, training), increase the timeout parameter.\n"
-                "- For background services (VMs, servers), use '... &' and a separate command to check readiness.\n"
-                "- Stderr is preserved separately in output for easier debugging.\n"
-                "- Non-zero exit codes are shown as [exit code: N] at the top of output.\n\n"
-                "IMPORTANT: Avoid using run_bash for operations that have dedicated tools:\n"
-                "- Reading files: use read_file (NOT cat/head/tail)\n"
-                "- Writing files: use write_file or edit_file (NOT echo/cat/sed)\n"
-                "- Listing files: use list_files (NOT find/ls for simple listing)\n"
-                "Use run_bash for these ONLY when the dedicated tool cannot accomplish the task "
-                "(e.g., complex pipelines, binary file operations, or commands that need shell features)."
-            ),
+            "description": "Execute a shell command in the workspace directory.",
             "parameters": {
                 "type": "object",
                 "required": ["command"],
@@ -567,7 +498,7 @@ TOOL_SCHEMAS = [
                     "command": {"type": "string", "description": "Shell command to run"},
                     "timeout": {
                         "type": "integer",
-                        "description": "Timeout in seconds (default 300). Increase for long builds/training.",
+                        "description": "Timeout in seconds (default 300). Increase for long builds.",
                         "default": 300,
                     },
                 },
@@ -578,15 +509,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "delegate_task",
-            "description": (
-                "Spawn a sub-agent in a completely isolated context to handle a subtask. "
-                "The sub-agent gets a clean context window and does NOT see your conversation history. "
-                "Only its structured result comes back. Use this for: "
-                "(1) exploring/reading many files without bloating your context, "
-                "(2) running a series of bash commands and getting a summary, "
-                "(3) any 'dirty work' that would waste your context budget. "
-                "The sub-agent has access to the same workspace and tools."
-            ),
+            "description": "Spawn a sub-agent in an isolated context to handle a subtask. Returns only its summary.",
             "parameters": {
                 "type": "object",
                 "required": ["task"],
@@ -597,7 +520,7 @@ TOOL_SCHEMAS = [
                     },
                     "role": {
                         "type": "string",
-                        "description": "Role for the sub-agent (e.g. 'codebase_explorer', 'test_runner', 'dependency_installer')",
+                        "description": "Role hint (e.g. 'codebase_explorer', 'test_runner')",
                         "default": "assistant",
                     },
                 },
@@ -608,7 +531,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Search the web for information. Use when you need documentation, examples, or domain knowledge not available locally. Returns titles, URLs, and snippets.",
+            "description": "Search the web. Returns titles, URLs, and snippets.",
             "parameters": {
                 "type": "object",
                 "required": ["query"],
@@ -616,7 +539,7 @@ TOOL_SCHEMAS = [
                     "query": {"type": "string", "description": "Search query"},
                     "max_results": {
                         "type": "integer",
-                        "description": "Max results to return (default 5)",
+                        "description": "Max results (default 5)",
                         "default": 5,
                     },
                 },
@@ -627,7 +550,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "web_fetch",
-            "description": "Fetch and read the text content of a web page. Use after web_search to read a specific page in detail.",
+            "description": "Fetch a web page as text. Use after web_search.",
             "parameters": {
                 "type": "object",
                 "required": ["url"],
@@ -797,22 +720,6 @@ def _validate_and_fix(name: str, arguments: dict) -> tuple[dict, str | None]:
                     warning = f"[auto-fix] Converted absolute path '{directory}' to relative '{arguments['directory']}'"
                     break
 
-    elif name == "edit_file":
-        path = arguments.get("path", "")
-        # Absolute path → relative
-        if path.startswith("/"):
-            for prefix in ["/app/", "/home/user/", "/workspace/"]:
-                if path.startswith(prefix):
-                    arguments["path"] = path[len(prefix):]
-                    warning = f"[auto-fix] Converted absolute path '{path}' to relative '{arguments['path']}'"
-                    break
-        # Missing required fields
-        if "old_string" not in arguments:
-            arguments["old_string"] = ""
-            warning = "[auto-fix] Missing 'old_string' — treating as new file creation."
-        if "new_string" not in arguments:
-            return arguments, "[auto-fix] Missing 'new_string'. You must specify the replacement text."
-
     return arguments, warning
 
 
@@ -921,7 +828,12 @@ TOOL_DISPATCH = {
 
 
 def execute_tool(name: str, arguments: dict) -> str:
-    """Execute a tool by name with pre-validation and auto-correction."""
+    """Execute a tool by name with pre-validation and auto-correction.
+
+    Inspired by Claude Code's tool result handling:
+    - Empty results get a marker so the model doesn't get confused
+    - Large results get persisted to disk with a preview (prevents context bloat)
+    """
     fn = TOOL_DISPATCH.get(name)
     if fn is None:
         return f"[error] Unknown tool: {name}"
@@ -943,5 +855,26 @@ def execute_tool(name: str, arguments: dict) -> str:
     # Prepend the auto-fix warning so the model knows what was corrected
     if fix_warning:
         result = f"{fix_warning}\n\n{result}"
+
+    # Claude Code pattern: empty results get a marker
+    if not result or (isinstance(result, str) and not result.strip()):
+        result = f"({name} completed with no output)"
+
+    # Claude Code pattern: persist large tool results to disk
+    if isinstance(result, str) and len(result) > 50_000 and name == "run_bash":
+        persisted_path = Path(config.WORKSPACE) / f"_tool_output_{name}.txt"
+        try:
+            persisted_path.write_text(result, encoding="utf-8")
+            preview = result[:2000]
+            result = (
+                f"Output too large ({len(result)} chars). Full output saved to: "
+                f"{persisted_path.name}\n\n"
+                f"Preview (first 2000 chars):\n{preview}\n...\n"
+                f"Use `cat {persisted_path.name}` or `tail {persisted_path.name}` "
+                f"to read specific parts."
+            )
+        except Exception:
+            # If persistence fails, truncate instead
+            result = result[:30_000] + f"\n\n[TRUNCATED — {len(result)} total chars]"
 
     return result
